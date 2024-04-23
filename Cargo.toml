@@ -2667,3 +2667,6 @@ panic = "abort"
 
 [package.metadata.docs.rs]
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
+
+[patch.crates-io]
+winit = { git = "https://github.com/Cyannide/winit.git", branch = "add_ime_support" }

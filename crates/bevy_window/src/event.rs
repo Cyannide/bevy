@@ -215,8 +215,24 @@ pub enum Ime {
         /// Window that received the event.
         window: Entity,
         /// Input string
-        value: String,
+        content: String,
+        /// If selection is Some, the selection / cursor position should be updated after
+        /// placing the `content`.
+        selection: Option<(usize, usize)>,
+        /// If compose_region is Some, the compose region should be updated after replacing the
+        /// text.
+        compose_region: Option<(usize, usize)>,
     },
+
+    /// Notifies when the text around the cursor should be deleted.
+    /// If `before_length` and `after_length` are [usize::MAX], the entire text should be deleted.
+    DeleteSurroundingText {
+        /// Window that received the event.
+        window: Entity,
+        before_length: usize,
+        after_length: usize,
+    },
+
     /// Notifies when the IME was enabled.
     ///
     /// After this event, you will receive events `Ime::Preedit` and `Ime::Commit`,

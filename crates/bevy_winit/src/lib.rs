@@ -595,8 +595,20 @@ fn handle_winit_event(
                             cursor,
                         });
                     }
-                    event::Ime::Commit(value) => {
-                        app.send_event(Ime::Commit { window, value });
+                    event::Ime::Commit{ content, selection, compose_region } => {
+                        app.send_event(Ime::Commit {
+                            window,
+                            content,
+                            selection,
+                            compose_region,
+                        });
+                    }
+                    event::Ime::DeleteSurroundingText { before_length, after_length } => {
+                        app.send_event(Ime::DeleteSurroundingText {
+                            window,
+                            before_length,
+                            after_length,
+                        });
                     }
                     event::Ime::Enabled => {
                         app.send_event(Ime::Enabled { window });
