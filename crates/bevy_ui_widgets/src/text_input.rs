@@ -55,6 +55,7 @@ const SHIFT_ALT: u8 = SHIFT | ALT;
 /// and then applied later by the [`apply_text_edits`](`bevy_text::apply_text_edits`) system.
 fn on_focused_keyboard_input(
     mut keyboard_input: On<FocusedInput<KeyboardInput>>,
+    mut input_focus: ResMut<InputFocus>,
     mut query: Query<&mut EditableText>,
     keys: Res<ButtonInput<Key>>,
 ) {
@@ -131,7 +132,10 @@ fn on_focused_keyboard_input(
         (NONE | SHIFT, Key::End) => queue_edit(TextEdit::LineEnd(shift_pressed)),
         (NONE, Key::Backspace) => queue_edit(TextEdit::Backspace),
         (NONE, Key::Delete) => queue_edit(TextEdit::Delete),
-        (NONE, Key::Escape) => queue_edit(TextEdit::CollapseSelection),
+        (NONE, Key::Escape) => {
+			queue_edit(TextEdit::CollapseSelection);
+			input_focus.clear();
+		}
         (NONE | SHIFT, Key::Character(_)) | (NONE, Key::Space) => {
             if let Some(text) = &keyboard_input.input.text
                 && !text.is_empty()
