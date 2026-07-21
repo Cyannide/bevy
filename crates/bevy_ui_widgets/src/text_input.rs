@@ -8,6 +8,9 @@
 
 use bevy_a11y::AccessibilitySystems;
 use bevy_app::{App, Plugin, PostUpdate, PreUpdate};
+use bevy_camera::visibility::Visibility;
+use bevy_color::{Alpha, Color};
+use bevy_ecs::lifecycle::{Add, Remove};
 use bevy_ecs::prelude::*;
 use bevy_input::keyboard::{Key, KeyboardInput};
 use bevy_input::{ButtonInput, InputSystems};
@@ -17,13 +20,16 @@ use bevy_input_focus::{
 use bevy_math::Vec2;
 use bevy_picking::events::{Drag, Pointer, Press, Release};
 use bevy_picking::pointer::PointerButton;
+use bevy_picking::Pickable;
 use bevy_reflect::Reflect;
-use bevy_text::{EditableText, PreeditCursor, TextEdit};
+use bevy_text::{
+    EditableText, EditableTextSystems, PreeditCursor, TextColor, TextEdit, TextFont, TextLayout,
+};
 use bevy_ui::widget::{scroll_editable_text, update_editable_text_layout, TextScroll};
 use bevy_ui::UiSystems;
 use bevy_ui::{
-    widget::TextNodeFlags, ComputedNode, ComputedUiRenderTargetInfo, ContentSize, Node,
-    UiGlobalTransform, UiScale,
+    widget::Text, widget::TextNodeFlags, ComputedNode, ComputedUiRenderTargetInfo, ContentSize,
+    Node, PositionType, UiGlobalTransform, UiScale, Val,
 };
 use bevy_window::{Ime, PrimaryWindow, Window};
 
@@ -133,9 +139,9 @@ fn on_focused_keyboard_input(
         (NONE, Key::Backspace) => queue_edit(TextEdit::Backspace),
         (NONE, Key::Delete) => queue_edit(TextEdit::Delete),
         (NONE, Key::Escape) => {
-			queue_edit(TextEdit::CollapseSelection);
-			input_focus.clear();
-		}
+            queue_edit(TextEdit::CollapseSelection);
+            input_focus.clear();
+        }
         (NONE | SHIFT, Key::Character(_)) | (NONE, Key::Space) => {
             if let Some(text) = &keyboard_input.input.text
                 && !text.is_empty()
@@ -439,6 +445,181 @@ fn on_focus_select_all(
     }
 }
 
+/// Hint text shown over an [`EditableText`] while its buffer is empty.
+///
+/// Rendered as an internal child label entity that rides the ordinary text
+/// pipeline; the hint never enters the editor's buffer, so `value()`, IME,
+/// selection and submit handling all observe the true (empty) contents.
+/// Styling follows the field's [`TextFont`] and [`TextColor`] (see
+/// [`PlaceholderColor`] to override the derived color).
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct Placeholder {
+    /// The hint text to display.
+    pub text: String,
+    /// When the hint is shown relative to focus. See [`PlaceholderMode`].
+    pub mode: PlaceholderMode,
+}
+
+impl Placeholder {
+    /// A placeholder with the default [`PlaceholderMode`].
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            mode: PlaceholderMode::default(),
+        }
+    }
+}
+
+/// When a [`Placeholder`] is shown, relative to focus.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+pub enum PlaceholderMode {
+    /// Shown whenever the buffer is empty, focused or not (web default).
+    #[default]
+    WhileEmpty,
+    /// Hidden the moment the field gains focus; shown again on
+    /// blur-while-empty.
+    UntilFocused,
+}
+
+/// Optional color override for [`Placeholder`] text. When absent, the
+/// placeholder renders in the field's [`TextColor`] at reduced alpha
+/// ([`PLACEHOLDER_ALPHA`]), so it tracks any theme without configuration.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct PlaceholderColor(pub Color);
+
+/// Alpha multiplier applied to the field's [`TextColor`] when no
+/// [`PlaceholderColor`] is provided.
+pub const PLACEHOLDER_ALPHA: f32 = 0.4;
+
+/// Marker for the internal label entity that renders a [`Placeholder`].
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+struct PlaceholderLabel;
+
+fn placeholder_color(explicit: Option<&PlaceholderColor>, field: &TextColor) -> TextColor {
+    match explicit {
+        Some(c) => TextColor(c.0),
+        None => TextColor(field.0.with_alpha(field.0.alpha() * PLACEHOLDER_ALPHA)),
+    }
+}
+
+fn placeholder_visibility(
+    editable_text: &EditableText,
+    mode: PlaceholderMode,
+    focused: bool,
+) -> Visibility {
+    let empty = editable_text.value() == "";
+    if empty && !(mode == PlaceholderMode::UntilFocused && focused) {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    }
+}
+
+/// Spawns the label when a [`Placeholder`] is added to an [`EditableText`].
+/// Initial visibility is computed here so the hint never flashes wrong on
+/// its first frame.
+fn on_placeholder_added(
+    add: On<Add, Placeholder>,
+    q_field: Query<(
+        &Placeholder,
+        Option<&PlaceholderColor>,
+        &TextFont,
+        &TextColor,
+        &TextLayout,
+        &EditableText,
+    )>,
+    input_focus: Option<Res<InputFocus>>,
+    mut commands: Commands,
+) {
+    let field = add.event_target();
+    let Ok((placeholder, color, font, text_color, layout, editable_text)) = q_field.get(field)
+    else {
+        return;
+    };
+    let focused = input_focus.as_ref().and_then(|focus| focus.get()) == Some(field);
+    commands.spawn((
+        PlaceholderLabel,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::ZERO,
+            top: Val::ZERO,
+            ..Default::default()
+        },
+        Text::new(placeholder.text.clone()),
+        font.clone(),
+        placeholder_color(color, text_color),
+        *layout,
+        placeholder_visibility(editable_text, placeholder.mode, focused),
+        Pickable::IGNORE,
+        ChildOf(field),
+    ));
+}
+
+/// Despawns the label when the [`Placeholder`] is removed.
+fn on_placeholder_removed(
+    remove: On<Remove, Placeholder>,
+    q_labels: Query<(Entity, &ChildOf), With<PlaceholderLabel>>,
+    mut commands: Commands,
+) {
+    let field = remove.event_target();
+    for (label, child_of) in &q_labels {
+        if child_of.parent() == field {
+            commands.entity(label).despawn();
+        }
+    }
+}
+
+/// Keeps placeholder labels in sync with their fields: visibility (buffer
+/// emptiness x [`PlaceholderMode`] x focus) and pass-through styling.
+/// Writes only on change so text re-layout isn't triggered needlessly.
+fn update_placeholders(
+    q_fields: Query<
+        (
+            &Placeholder,
+            Option<&PlaceholderColor>,
+            Ref<TextFont>,
+            &TextColor,
+            &EditableText,
+        ),
+        Without<PlaceholderLabel>,
+    >,
+    mut q_labels: Query<
+        (
+            &ChildOf,
+            &mut Visibility,
+            &mut Text,
+            &mut TextFont,
+            &mut TextColor,
+        ),
+        With<PlaceholderLabel>,
+    >,
+    input_focus: Option<Res<InputFocus>>,
+) {
+    let focus = input_focus.as_ref().and_then(|focus| focus.get());
+    for (child_of, mut visibility, mut text, mut font, mut color) in &mut q_labels {
+        let field = child_of.parent();
+        let Ok((placeholder, pcolor, field_font, field_color, editable_text)) = q_fields.get(field)
+        else {
+            continue;
+        };
+        visibility.set_if_neq(placeholder_visibility(
+            editable_text,
+            placeholder.mode,
+            focus == Some(field),
+        ));
+        if text.0 != placeholder.text {
+            text.0.clone_from(&placeholder.text);
+        }
+        if field_font.is_changed() {
+            *font = (*field_font).clone();
+        }
+        color.set_if_neq(placeholder_color(pcolor, field_color));
+    }
+}
+
 /// `on_focus_select_all` defers selection until pointer release if the focus was gained
 /// by a pointer press. This system applies the queued selection.
 ///
@@ -497,6 +678,8 @@ impl Plugin for EditableTextInputPlugin {
             .add_observer(on_pointer_press)
             .add_observer(on_focus_lost)
             .add_observer(on_focus_select_all)
+            .add_observer(on_placeholder_added)
+            .add_observer(on_placeholder_removed)
             .add_systems(
                 PreUpdate,
                 (
@@ -524,6 +707,12 @@ impl Plugin for EditableTextInputPlugin {
                 PostUpdate,
                 apply_queued_select_all
                     .in_set(UiSystems::PostLayout)
+                    .before(update_editable_text_layout),
+            )
+            .add_systems(
+                PostUpdate,
+                update_placeholders
+                    .after(EditableTextSystems)
                     .before(update_editable_text_layout),
             );
 
