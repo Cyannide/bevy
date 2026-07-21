@@ -49,12 +49,12 @@ use bevy_input::{
 };
 use bevy_input_focus::{
     tab_navigation::{NavAction, TabGroup, TabNavigation},
-    FocusCause, FocusedInput, InputFocus,
+    FocusCause, FocusedInput, InputFocus, InputFocusSystems,
 };
 use bevy_log::warn;
 use bevy_picking::events::{Cancel, Click, DragEnd, Pointer, Press, Release};
 use bevy_reflect::Reflect;
-use bevy_ui::{widget::Button, InteractionDisabled, Pressed};
+use bevy_ui::{widget::Button, InteractionDisabled, Pressed, UiSystems};
 
 use crate::{Activate, ActivateOnPress};
 
@@ -476,7 +476,9 @@ impl Plugin for MenuPlugin {
             PostUpdate,
             (menu_acquire_focus, menu_on_lose_focus)
                 .chain()
-                .after(VisibilitySystems::VisibilityPropagate),
+                .after(VisibilitySystems::VisibilityPropagate)
+                .before(InputFocusSystems::FocusChangeEvents)
+                .before(UiSystems::PostLayout),
         )
         .add_observer(menu_on_key_event)
         .add_observer(menu_item_on_pointer_down)
