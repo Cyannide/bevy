@@ -414,7 +414,7 @@ impl LogPlugin {
         let result = env_filters
             .split(',')
             .filter(|s| !s.is_empty())
-            .try_fold(default_filters.clone(), |filters, directive| {
+            .try_fold(default_filters, |filters, directive| {
                 directive.parse().map(|d| filters.add_directive(d))
             });
         // Fall back to just the default filters if the env filters are malformed
@@ -428,7 +428,7 @@ impl LogPlugin {
                 {
                     eprintln!("LogPlugin failed to parse filter from env: {e}");
                 }
-                default_filters
+                EnvFilter::builder().parse_lossy(format!("{},{}", self.level, self.filter))
             }
         }
     }
