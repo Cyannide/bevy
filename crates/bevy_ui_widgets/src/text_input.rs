@@ -8,7 +8,7 @@
 
 use bevy_a11y::AccessibilitySystems;
 use bevy_app::{App, Plugin, PostUpdate, PreUpdate};
-use bevy_camera::visibility::Visibility;
+use bevy_camera::visibility::{InheritedVisibility, Visibility};
 use bevy_color::{Alpha, Color};
 use bevy_ecs::lifecycle::{Add, Remove};
 use bevy_ecs::prelude::*;
@@ -641,6 +641,7 @@ fn update_placeholders(
             &ComputedNode,
             &UiGlobalTransform,
             &ComputedUiRenderTargetInfo,
+            &InheritedVisibility,
         ),
         (Without<PlaceholderLabel>, Without<PlaceholderLabelText>),
     >,
@@ -661,6 +662,7 @@ fn update_placeholders(
             field_node,
             field_transform,
             target,
+            field_visibility,
         )) = q_fields.get(label.field)
         else {
             // field despawned (or no longer an editable text): the label is
@@ -692,11 +694,20 @@ fn update_placeholders(
             continue;
         }
 
-        visibility.set_if_neq(placeholder_visibility(
-            editable_text,
-            placeholder.mode,
-            focus == Some(label.field),
-        ));
+        // The label is a root-level overlay -- it inherits nothing from the
+        // field, so the field's effective visibility must be mirrored by
+        // hand (one more sync dimension alongside position). `Display::None`
+        // needs no handling: the outer clip node collapses with the field's
+        // zero-sized content box.
+        visibility.set_if_neq(if field_visibility.get() {
+            placeholder_visibility(
+                editable_text,
+                placeholder.mode,
+                focus == Some(label.field),
+            )
+        } else {
+            Visibility::Hidden
+        });
         if let Ok((mut text, mut font, mut color)) = q_label_text.get_mut(label.text) {
             if text.0 != placeholder.text {
                 text.0.clone_from(&placeholder.text);
@@ -811,6 +822,9 @@ impl Plugin for EditableTextInputPlugin {
                     .in_set(UiSystems::PostLayout)
                     .in_set(PlaceholderSystems)
                     .after(update_editable_text_layout)
+                    // read THIS frame's propagated visibility, not last
+                    // frame's (same requirement as the menu focus systems)
+                    .after(bevy_camera::visibility::VisibilitySystems::VisibilityPropagate)
                     // True ordering, matching update_ime_position:
                     // accessibility sees fresh label text same-frame if
                     // placeholder labels ever become a11y-relevant.
@@ -833,7 +847,7 @@ impl Plugin for EditableTextInputPlugin {
 mod tests {
     use super::*;
     use bevy_app::App;
-    use bevy_input::{keyboard::KeyboardInput, ButtonState, InputPlugin};
+    use bevy_input::{keyboard::{KeyboardInput, KeyCode}, ButtonState, InputPlugin};
     use bevy_input_focus::InputDispatchPlugin;
 
     #[test]
