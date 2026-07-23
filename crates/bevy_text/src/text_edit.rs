@@ -367,10 +367,23 @@ pub(crate) fn poll_and_apply_paste(
     driver: &mut PlainEditorDriver<TextBrush>,
     max_characters: Option<usize>,
     char_filter: impl Fn(char) -> bool,
+    mask: Option<(&crate::CharacterMask, &mut String)>,
 ) -> bool {
     match read.poll_result() {
         Some(Ok(text)) => {
-            if matches!(
+            // Masked fields route the pasted text into the real value (this
+            // is the one place the clipboard string is visible, which is why
+            // masking lives in bevy_text).
+            if let Some((mask, value)) = mask {
+                crate::masking::masked_insert(
+                    &text,
+                    mask,
+                    value,
+                    driver,
+                    max_characters,
+                    &char_filter,
+                );
+            } else if matches!(
                 insert_filtered(driver, &text, max_characters, char_filter),
                 Err(InsertRejection::CharFilter)
             ) {
