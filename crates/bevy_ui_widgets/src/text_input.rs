@@ -138,7 +138,20 @@ fn on_focused_keyboard_input(
         (NONE, Key::Delete) => queue_edit(TextEdit::Delete),
         (NONE, Key::Escape) => {
             queue_edit(TextEdit::CollapseSelection);
-            input_focus.clear();
+            if keyboard_input.input.state.is_pressed() {
+                input_focus.clear();
+            }
+            // Order matters: `queue_edit` unconditionally sets
+            // `should_propagate = false`, which is right for the editing keys
+            // but not for Escape -- its meaning belongs to the surrounding
+            // context (cancel a dialog, close a menu, back out of a screen),
+            // so after the field collapses its selection and releases focus,
+            // the event must keep bubbling to ancestor and window-level
+            // handlers. `InputFocus` is already cleared and the event's
+            // target field is rewritten at each hop by the time they run;
+            // context handlers that need to distinguish "this press blurred
+            // a field" must test `original_event_target()`.
+            should_propagate = true;
         }
         (NONE | SHIFT, Key::Character(_)) | (NONE, Key::Space) => {
             if let Some(text) = &keyboard_input.input.text
@@ -718,6 +731,13 @@ fn apply_queued_select_all(
     }
 }
 
+/// System set for [`update_placeholders`], public so downstream code can
+/// order against placeholder label updates.
+///
+/// Runs in [`PostUpdate`], in [`UiSystems::PostLayout`].
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PlaceholderSystems;
+
 /// System sets for IME-related systems used by [`EditableTextInputPlugin`].
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImeSystems {
@@ -789,7 +809,12 @@ impl Plugin for EditableTextInputPlugin {
                 PostUpdate,
                 update_placeholders
                     .in_set(UiSystems::PostLayout)
+                    .in_set(PlaceholderSystems)
                     .after(update_editable_text_layout)
+                    // True ordering, matching update_ime_position:
+                    // accessibility sees fresh label text same-frame if
+                    // placeholder labels ever become a11y-relevant.
+                    .before(AccessibilitySystems::Update)
                     // reads InputFocus only; same false positive as
                     // update_ime_position
                     .ambiguous_with(InputFocusSystems::FocusChangeEvents),
@@ -801,5 +826,68 @@ impl Plugin for EditableTextInputPlugin {
             .register_required_components::<EditableText, TextNodeFlags>()
             .register_required_components::<EditableText, ContentSize>()
             .register_required_components::<EditableText, TextScroll>();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy_app::App;
+    use bevy_input::{keyboard::KeyboardInput, ButtonState, InputPlugin};
+    use bevy_input_focus::InputDispatchPlugin;
+
+    #[test]
+    fn escape_blurs_field_and_propagates_to_window() {
+        #[derive(Resource, Default)]
+        struct WindowSawEscape(u32);
+
+        let mut app = App::new();
+        app.add_plugins((InputPlugin, InputDispatchPlugin))
+            .init_resource::<InputFocus>()
+            .init_resource::<WindowSawEscape>()
+            .add_observer(on_focused_keyboard_input);
+
+        // `WindowTraversal` queries `Option<&ChildOf>`, and `get_components`
+        // fails with `ComponentNotRegistered` -- silently halting
+        // propagation -- if `ChildOf` has never been registered in the
+        // world. Nothing in this minimal app registers it.
+        app.world_mut().register_component::<ChildOf>();
+
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let editable_text = app.world_mut().spawn(EditableText::default()).id();
+        app.world_mut().entity_mut(window).observe(
+            move |input: On<FocusedInput<KeyboardInput>>,
+                  mut saw: ResMut<WindowSawEscape>| {
+                if matches!(input.input.logical_key, Key::Escape)
+                    && input.input.state.is_pressed()
+                {
+                    // The target field is rewritten at each hop; the origin
+                    // survives on the trigger. The SP3 window shortcut
+                    // guard depends on exactly this.
+                    assert_eq!(input.focused_entity, window);
+                    assert_eq!(input.original_event_target(), editable_text);
+                    saw.0 += 1;
+                }
+            },
+        );
+        app.insert_resource(InputFocus::from_entity(editable_text));
+
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::Escape,
+            logical_key: Key::Escape,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window,
+        });
+        app.update();
+
+        // The field released focus...
+        assert!(app.world().resource::<InputFocus>().get().is_none());
+        // ...and the same press reached the window observer.
+        assert_eq!(app.world().resource::<WindowSawEscape>().0, 1);
     }
 }

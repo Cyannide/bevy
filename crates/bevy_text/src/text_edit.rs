@@ -245,7 +245,7 @@ impl TextEdit {
                     For proper handling of async clipboard operations, use `EditableText::apply_pending_edits` instead.");
 
                 let mut read = clipboard.fetch_text();
-                poll_and_apply_paste(&mut read, driver, max_characters, char_filter);
+                poll_and_apply_paste(&mut read, driver, max_characters, char_filter, None);
             }
             TextEdit::Insert(text) => {
                 let _ = insert_filtered(driver, text.as_str(), max_characters, char_filter);
