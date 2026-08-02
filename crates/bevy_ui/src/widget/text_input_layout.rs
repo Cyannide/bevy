@@ -518,12 +518,18 @@ pub fn scroll_editable_text(
     let focus_changed = *previous_focus != current_focus;
 
     for (entity, editable_text, generation, mut scroll, node, info) in query.iter_mut() {
-        if !(editable_text.is_changed()
-            || generation.is_changed()
+        // Keyed on the editor GENERATION (bumps on edits and cursor moves),
+        // not on EditableText's change flag: update_editable_text_layout
+        // drives the editor mutably every frame while focused, so the flag is
+        // always hot and caret-follow re-clamped every frame -- manual wheel
+        // scrolling (TextScroll writes from outside) could never move the
+        // cursor's line out of view. (shurley fork fix, 2026-08-02)
+        if !(generation.is_changed()
             || focus_changed && (Some(entity) == *previous_focus || Some(entity) == current_focus))
         {
             continue;
         }
+        let _ = &editable_text;
 
         let view_size = node.content_box().size();
         if view_size.cmple(Vec2::ZERO).any() {
