@@ -57,6 +57,82 @@ pub struct ClipboardPlugin;
 impl bevy_app::Plugin for ClipboardPlugin {
     fn build(&self, app: &mut bevy_app::App) {
         app.init_resource::<Clipboard>();
+        // Installed at startup, not first use: the listener has to already be
+        // live when the FIRST paste keystroke's `paste` event fires.
+        #[cfg(target_arch = "wasm32")]
+        paste_stash::install();
+    }
+}
+
+/// Browsers deliver pasted text two ways: the `paste` [`ClipboardEvent`],
+/// whose `clipboardData` is readable WITHOUT any permission because the
+/// user's keystroke is itself the grant, and `navigator.clipboard.readText()`,
+/// which Chrome gates behind a `clipboard-read` permission prompt and Firefox
+/// does not expose to pages at all. A window-level `paste` listener stashes
+/// the event's text here so that [`Clipboard::fetch_text`] can answer a
+/// paste-keystroke-driven read from the stash — no prompt on any browser —
+/// and only falls back to `readText()` for reads that no paste event drove.
+///
+/// [`ClipboardEvent`]: web_sys::ClipboardEvent
+#[cfg(target_arch = "wasm32")]
+mod paste_stash {
+    use core::cell::RefCell;
+    use wasm_bindgen::{closure::Closure, JsCast};
+
+    std::thread_local! {
+        /// The most recent paste event's text and its `performance.now()`
+        /// arrival time, consumed by the next fetch.
+        static STASH: RefCell<Option<(String, f64)>> = const { RefCell::new(None) };
+        static INSTALLED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    }
+
+    /// How long a stashed paste stays claimable. The browser dispatches
+    /// `paste` immediately after the keystroke that queued the edit, so the
+    /// fetch arrives within a frame or two; a generous bound only has to keep
+    /// a long-abandoned paste from satisfying an unrelated programmatic read.
+    const FRESH_MS: f64 = 1_000.0;
+
+    fn now_ms() -> f64 {
+        web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.now())
+            .unwrap_or(0.0)
+    }
+
+    /// Install the window-level `paste` listener. Idempotent; the closure is
+    /// deliberately leaked (`forget`) because it must outlive everything.
+    pub(crate) fn install() {
+        if INSTALLED.with(|i| i.replace(true)) {
+            return;
+        }
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let closure =
+            Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(|ev: web_sys::ClipboardEvent| {
+                if let Some(data) = ev.clipboard_data()
+                    && let Ok(text) = data.get_data("text/plain")
+                {
+                    STASH.with(|s| *s.borrow_mut() = Some((text, now_ms())));
+                }
+            });
+        if window
+            .add_event_listener_with_callback("paste", closure.as_ref().unchecked_ref())
+            .is_ok()
+        {
+            closure.forget();
+        } else {
+            INSTALLED.with(|i| i.set(false));
+        }
+    }
+
+    /// The stashed paste, if one arrived within [`FRESH_MS`]. Consuming: a
+    /// paste answers exactly one fetch.
+    pub(crate) fn take_fresh() -> Option<String> {
+        STASH.with(|s| match s.borrow_mut().take() {
+            Some((text, at)) if now_ms() - at <= FRESH_MS => Some(text),
+            _ => None,
+        })
     }
 }
 
@@ -242,7 +318,12 @@ impl Clipboard {
 
         #[cfg(target_arch = "wasm32")]
         {
-            if let Some(clipboard) = web_sys::window().map(|w| w.navigator().clipboard()) {
+            // A paste keystroke already delivered its text through the
+            // permissionless `paste` event — answer from the stash and skip
+            // readText(), which prompts on Chrome and fails on Firefox.
+            if let Some(text) = paste_stash::take_fresh() {
+                ClipboardRead::Ready(Ok(text))
+            } else if let Some(clipboard) = web_sys::window().map(|w| w.navigator().clipboard()) {
                 let shared = Arc::new(Mutex::new(None));
                 let shared_clone = shared.clone();
                 wasm_bindgen_futures::spawn_local(async move {
