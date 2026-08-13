@@ -516,14 +516,20 @@ pub struct Placeholder {
     pub text: String,
     /// When the hint is shown relative to focus. See [`PlaceholderMode`].
     pub mode: PlaceholderMode,
+    /// [`GlobalZIndex`] for the hint overlay. Defaults to `Some(1)`, which
+    /// stacks it above default-Z UI roots; a field inside a modal or popup
+    /// with its own `GlobalZIndex` should set a higher value here. `None`
+    /// stacks the overlay like an ordinary root node.
+    pub z_index: Option<i32>,
 }
 
 impl Placeholder {
-    /// A placeholder with the default [`PlaceholderMode`].
+    /// A placeholder with the default [`PlaceholderMode`] and z-index.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             mode: PlaceholderMode::default(),
+            z_index: Some(1),
         }
     }
 }
@@ -534,9 +540,9 @@ pub enum PlaceholderMode {
     /// Shown whenever the buffer is empty, focused or not (web default).
     #[default]
     WhileEmpty,
-    /// Hidden the moment the field gains focus; shown again on
-    /// blur-while-empty.
-    UntilFocused,
+    /// Hidden while the field has focus; shown whenever it is empty and
+    /// unfocused.
+    UnlessFocused,
 }
 
 /// Optional color override for [`Placeholder`] text. When absent, the
@@ -587,7 +593,7 @@ fn placeholder_visibility(
     focused: bool,
 ) -> Visibility {
     let empty = editable_text.value() == "";
-    if empty && !(mode == PlaceholderMode::UntilFocused && focused) {
+    if empty && !(mode == PlaceholderMode::UnlessFocused && focused) {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -643,13 +649,15 @@ fn on_placeholder_added(
             overflow: Overflow::clip(),
             ..Default::default()
         },
-        // deterministically above default-Z ui roots; overlays that must
-        // cover a hinted field (popups, modals) should use a higher value.
-        GlobalZIndex(1),
         Visibility::Hidden,
         Pickable::IGNORE,
     ));
     label.add_child(text);
+    // stacking is the field author's call: the default Some(1) sits above
+    // default-Z ui roots, a modal-hosted field sets something higher
+    if let Some(z) = placeholder.z_index {
+        label.insert(GlobalZIndex(z));
+    }
     // render to the same camera as the field
     if let Some(camera) = target_camera {
         label.insert(camera.clone());
