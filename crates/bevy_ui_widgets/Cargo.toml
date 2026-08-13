@@ -30,6 +30,11 @@ accesskit = "0.24"
 parley = { version = "0.9.0", default-features = false }
 smol_str = "0.2"
 
+# One wasm binary serves every host OS, so the shortcut layout (Cmd vs Ctrl)
+# has to be read from the browser at runtime -- see `mac_host` in text_input.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Navigator"] }
+
 [features]
 default = []
 

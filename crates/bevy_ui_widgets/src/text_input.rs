@@ -36,19 +36,40 @@ const SUPER: u8 = 1;
 const CTRL: u8 = 2;
 const ALT: u8 = 4;
 const SHIFT: u8 = 8;
-const COMMAND: u8 = if cfg!(target_os = "macos") {
-    SUPER
-} else {
-    CTRL
-};
-// Modifier key for word-level navigation and selection. Alt on macOS, Control otherwise.
-const WORD: u8 = if cfg!(target_os = "macos") { ALT } else { CTRL };
-const SHIFT_WORD: u8 = SHIFT | WORD;
-#[cfg(target_os = "macos")]
 const SHIFT_SUPER: u8 = SHIFT | SUPER;
-const SHIFT_COMMAND: u8 = SHIFT | COMMAND;
-#[cfg(not(target_os = "macos"))]
 const SHIFT_ALT: u8 = SHIFT | ALT;
+
+/// Whether shortcuts should follow the macOS layout: Cmd is the command key
+/// and Option navigates words.
+///
+/// A compile-time fact everywhere except wasm32, where ONE binary serves
+/// every host OS and `cfg!(target_os)` is `"unknown"` -- deciding at compile
+/// time silently turned the command key into Ctrl for every macOS browser
+/// user, so the browser has to be asked at runtime instead.
+fn mac_host() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cfg!(target_os = "macos")
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::sync::OnceLock;
+        static MAC: OnceLock<bool> = OnceLock::new();
+        *MAC.get_or_init(|| {
+            web_sys::window().is_some_and(|w| {
+                let nav = w.navigator();
+                // platform() is deprecated but universally shipped; the UA
+                // string is the fallback where it comes back empty. "iP"
+                // covers iPhone/iPad, which share the Cmd layout with
+                // hardware keyboards.
+                let platform = nav.platform().unwrap_or_default();
+                platform.starts_with("Mac")
+                    || platform.starts_with("iP")
+                    || (platform.is_empty() && nav.user_agent().unwrap_or_default().contains("Mac"))
+            })
+        })
+    }
+}
 
 /// System that processes keyboard input events into text edit actions for focused [`EditableText`] widgets.
 ///
@@ -87,6 +108,16 @@ fn on_focused_keyboard_input(
 
     let shift_pressed = (mod_flags & SHIFT) != 0;
 
+    // The platform's shortcut layout. Runtime values rather than consts (and
+    // match guards rather than patterns below) because on wasm the layout is
+    // only knowable at runtime -- see `mac_host`.
+    let mac = mac_host();
+    let command = if mac { SUPER } else { CTRL };
+    // Modifier key for word-level navigation and selection. Alt on macOS, Control otherwise.
+    let word = if mac { ALT } else { CTRL };
+    let shift_command = SHIFT | command;
+    let shift_word = SHIFT | word;
+
     let mut should_propagate = true;
 
     let mut queue_edit = |edit| {
@@ -100,38 +131,53 @@ fn on_focused_keyboard_input(
         (NONE, Key::Copy) => queue_edit(TextEdit::Copy),
         (NONE, Key::Cut) => queue_edit(TextEdit::Cut),
         (NONE, Key::Paste) => queue_edit(TextEdit::Paste),
-        (COMMAND, Key::Character(c)) if c.eq_ignore_ascii_case("a") => {
+        (m, Key::Character(c)) if m == command && c.eq_ignore_ascii_case("a") => {
             queue_edit(TextEdit::SelectAll);
         }
-        (COMMAND, Key::Character(c)) if c.eq_ignore_ascii_case("c") => {
+        (m, Key::Character(c)) if m == command && c.eq_ignore_ascii_case("c") => {
             queue_edit(TextEdit::Copy);
         }
-        (COMMAND, Key::Character(c)) if c.eq_ignore_ascii_case("x") => queue_edit(TextEdit::Cut),
-        (COMMAND, Key::Character(c)) if c.eq_ignore_ascii_case("v") => {
+        (m, Key::Character(c)) if m == command && c.eq_ignore_ascii_case("x") => {
+            queue_edit(TextEdit::Cut);
+        }
+        (m, Key::Character(c)) if m == command && c.eq_ignore_ascii_case("v") => {
             queue_edit(TextEdit::Paste);
         }
-        #[cfg(not(target_os = "macos"))]
-        (SHIFT, Key::Delete) => queue_edit(TextEdit::Cut),
-        (WORD, Key::Backspace) => queue_edit(TextEdit::BackspaceWord),
-        (WORD, Key::Delete) => queue_edit(TextEdit::DeleteWord),
-        #[cfg(target_os = "macos")]
-        (SUPER | SHIFT_SUPER, Key::ArrowLeft) => queue_edit(TextEdit::HardLineStart(shift_pressed)),
-        #[cfg(target_os = "macos")]
-        (SUPER | SHIFT_SUPER, Key::ArrowRight) => queue_edit(TextEdit::HardLineEnd(shift_pressed)),
-        #[cfg(not(target_os = "macos"))]
-        (ALT | SHIFT_ALT, Key::Home) => queue_edit(TextEdit::HardLineStart(shift_pressed)),
-        #[cfg(not(target_os = "macos"))]
-        (ALT | SHIFT_ALT, Key::End) => queue_edit(TextEdit::HardLineEnd(shift_pressed)),
-        (WORD | SHIFT_WORD, Key::ArrowLeft) => queue_edit(TextEdit::WordLeft(shift_pressed)),
-        (WORD | SHIFT_WORD, Key::ArrowRight) => queue_edit(TextEdit::WordRight(shift_pressed)),
+        (SHIFT, Key::Delete) if !mac => queue_edit(TextEdit::Cut),
+        (m, Key::Backspace) if m == word => queue_edit(TextEdit::BackspaceWord),
+        (m, Key::Delete) if m == word => queue_edit(TextEdit::DeleteWord),
+        (SUPER | SHIFT_SUPER, Key::ArrowLeft) if mac => {
+            queue_edit(TextEdit::HardLineStart(shift_pressed));
+        }
+        (SUPER | SHIFT_SUPER, Key::ArrowRight) if mac => {
+            queue_edit(TextEdit::HardLineEnd(shift_pressed));
+        }
+        (ALT | SHIFT_ALT, Key::Home) if !mac => {
+            queue_edit(TextEdit::HardLineStart(shift_pressed));
+        }
+        (ALT | SHIFT_ALT, Key::End) if !mac => queue_edit(TextEdit::HardLineEnd(shift_pressed)),
+        (m, Key::ArrowLeft) if m == word || m == shift_word => {
+            queue_edit(TextEdit::WordLeft(shift_pressed));
+        }
+        (m, Key::ArrowRight) if m == word || m == shift_word => {
+            queue_edit(TextEdit::WordRight(shift_pressed));
+        }
         (NONE | SHIFT, Key::ArrowLeft) => queue_edit(TextEdit::Left(shift_pressed)),
         (NONE | SHIFT, Key::ArrowRight) => queue_edit(TextEdit::Right(shift_pressed)),
-        (COMMAND | SHIFT_COMMAND, Key::ArrowUp) => queue_edit(TextEdit::TextStart(shift_pressed)),
-        (COMMAND | SHIFT_COMMAND, Key::ArrowDown) => queue_edit(TextEdit::TextEnd(shift_pressed)),
+        (m, Key::ArrowUp) if m == command || m == shift_command => {
+            queue_edit(TextEdit::TextStart(shift_pressed));
+        }
+        (m, Key::ArrowDown) if m == command || m == shift_command => {
+            queue_edit(TextEdit::TextEnd(shift_pressed));
+        }
         (NONE | SHIFT, Key::ArrowUp) => queue_edit(TextEdit::Up(shift_pressed)),
         (NONE | SHIFT, Key::ArrowDown) => queue_edit(TextEdit::Down(shift_pressed)),
-        (COMMAND | SHIFT_COMMAND, Key::Home) => queue_edit(TextEdit::TextStart(shift_pressed)),
-        (COMMAND | SHIFT_COMMAND, Key::End) => queue_edit(TextEdit::TextEnd(shift_pressed)),
+        (m, Key::Home) if m == command || m == shift_command => {
+            queue_edit(TextEdit::TextStart(shift_pressed));
+        }
+        (m, Key::End) if m == command || m == shift_command => {
+            queue_edit(TextEdit::TextEnd(shift_pressed));
+        }
         (NONE | SHIFT, Key::Home) => queue_edit(TextEdit::LineStart(shift_pressed)),
         (NONE | SHIFT, Key::End) => queue_edit(TextEdit::LineEnd(shift_pressed)),
         (NONE, Key::Backspace) => queue_edit(TextEdit::Backspace),
@@ -700,11 +746,7 @@ fn update_placeholders(
         // needs no handling: the outer clip node collapses with the field's
         // zero-sized content box.
         visibility.set_if_neq(if field_visibility.get() {
-            placeholder_visibility(
-                editable_text,
-                placeholder.mode,
-                focus == Some(label.field),
-            )
+            placeholder_visibility(editable_text, placeholder.mode, focus == Some(label.field))
         } else {
             Visibility::Hidden
         });
@@ -847,7 +889,10 @@ impl Plugin for EditableTextInputPlugin {
 mod tests {
     use super::*;
     use bevy_app::App;
-    use bevy_input::{keyboard::{KeyboardInput, KeyCode}, ButtonState, InputPlugin};
+    use bevy_input::{
+        keyboard::{KeyCode, KeyboardInput},
+        ButtonState, InputPlugin,
+    };
     use bevy_input_focus::InputDispatchPlugin;
 
     #[test]
@@ -873,10 +918,8 @@ mod tests {
             .id();
         let editable_text = app.world_mut().spawn(EditableText::default()).id();
         app.world_mut().entity_mut(window).observe(
-            move |input: On<FocusedInput<KeyboardInput>>,
-                  mut saw: ResMut<WindowSawEscape>| {
-                if matches!(input.input.logical_key, Key::Escape)
-                    && input.input.state.is_pressed()
+            move |input: On<FocusedInput<KeyboardInput>>, mut saw: ResMut<WindowSawEscape>| {
+                if matches!(input.input.logical_key, Key::Escape) && input.input.state.is_pressed()
                 {
                     // The target field is rewritten at each hop; the origin
                     // survives on the trigger. The SP3 window shortcut
