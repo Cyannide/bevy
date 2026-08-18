@@ -702,7 +702,6 @@ fn update_placeholders(
     mut q_labels: Query<(Entity, &mut PlaceholderLabel, &mut Node, &mut Visibility)>,
     mut q_label_text: Query<(&mut Text, &mut TextFont, &mut TextColor), With<PlaceholderLabelText>>,
     input_focus: Option<Res<InputFocus>>,
-    ui_scale: Res<UiScale>,
     mut commands: Commands,
 ) {
     let focus = input_focus.as_ref().and_then(|focus| focus.get());
@@ -727,10 +726,16 @@ fn update_placeholders(
 
         // overlay the field's content box: node-local -> target physical via
         // the field's transform, physical -> root-node logical by undoing the
-        // layout scale (same pipeline as update_ime_position).
+        // layout scale. `ComputedUiRenderTargetInfo::scale_factor` ALREADY
+        // multiplies `UiScale` in (see ui/src/update.rs), and root-level
+        // `Val::Px` resolve through that same combined factor -- multiplying
+        // `ui_scale` again here displaced the label by 1/ui_scale the moment
+        // an app set UiScale != 1 (the pointer handlers above are different:
+        // they convert WINDOW-logical coordinates, which really do need the
+        // UiScale component divided back out).
         let content = field_node.content_box();
         let min = field_transform.affine().transform_point2(content.min);
-        let scale = target.scale_factor() * ui_scale.0;
+        let scale = target.scale_factor();
         let size = content.size();
         let (left, top) = (Val::Px(min.x / scale), Val::Px(min.y / scale));
         let (width, height) = (Val::Px(size.x / scale), Val::Px(size.y / scale));
