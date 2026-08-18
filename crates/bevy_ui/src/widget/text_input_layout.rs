@@ -193,27 +193,34 @@ pub fn update_editable_text_styles(
                 ));
         }
 
-        if text_font.is_changed() {
-            let Ok(resolved_font) = resolve_font_source(&text_font, fonts.as_ref()) else {
-                continue;
-            };
-
-            let family = resolved_font.into_owned();
-            let style_set = editable_text.editor.edit_styles();
-            style_set.insert(StyleProperty::FontFamily(family));
-            style_set.insert(StyleProperty::FontWeight(text_font.weight.into()));
-            style_set.insert(StyleProperty::FontWidth(text_font.width.into()));
-            style_set.insert(StyleProperty::FontStyle(text_font.style.into()));
-            style_set.insert(StyleProperty::FontFeatures(
-                (&text_font.font_features).into(),
-            ));
-            style_set.insert(StyleProperty::FontVariations(
-                (&text_font.font_variations).into(),
-            ));
-            style_set.insert(StyleProperty::Brush(TextBrush::new(
-                0,
-                text_font.font_smoothing,
-            )));
+        // `fonts.is_changed()` is the retry: a `FontSource::Handle` is usually
+        // still loading on the frame its field spawns, and `text_font` is only
+        // `is_changed()` that once -- without the retry the editor keeps
+        // parley's default family forever.
+        if text_font.is_changed() || fonts.is_changed() {
+            // Deliberately NOT `else { continue }`: an unresolved font used to
+            // skip the LineHeight and TextLayout sync below it, so a field
+            // whose font was not ready at spawn never got its line height or
+            // its `justify` (the text stayed start-aligned no matter what
+            // `TextLayout` said).
+            if let Ok(resolved_font) = resolve_font_source(&text_font, fonts.as_ref()) {
+                let family = resolved_font.into_owned();
+                let style_set = editable_text.editor.edit_styles();
+                style_set.insert(StyleProperty::FontFamily(family));
+                style_set.insert(StyleProperty::FontWeight(text_font.weight.into()));
+                style_set.insert(StyleProperty::FontWidth(text_font.width.into()));
+                style_set.insert(StyleProperty::FontStyle(text_font.style.into()));
+                style_set.insert(StyleProperty::FontFeatures(
+                    (&text_font.font_features).into(),
+                ));
+                style_set.insert(StyleProperty::FontVariations(
+                    (&text_font.font_variations).into(),
+                ));
+                style_set.insert(StyleProperty::Brush(TextBrush::new(
+                    0,
+                    text_font.font_smoothing,
+                )));
+            }
         }
 
         if line_height.is_changed() {
