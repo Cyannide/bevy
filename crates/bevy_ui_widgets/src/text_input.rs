@@ -22,12 +22,13 @@ use bevy_picking::events::{Drag, Pointer, Press, Release};
 use bevy_picking::pointer::PointerButton;
 use bevy_picking::Pickable;
 use bevy_reflect::Reflect;
-use bevy_text::{EditableText, PreeditCursor, TextColor, TextEdit, TextFont, TextLayout};
+use bevy_text::{EditableText, Justify, PreeditCursor, TextColor, TextEdit, TextFont, TextLayout};
 use bevy_ui::widget::{scroll_editable_text, update_editable_text_layout, TextScroll};
 use bevy_ui::UiSystems;
 use bevy_ui::{
     widget::Text, widget::TextNodeFlags, ComputedNode, ComputedUiRenderTargetInfo, ContentSize,
-    GlobalZIndex, Node, Overflow, PositionType, UiGlobalTransform, UiScale, UiTargetCamera, Val,
+    GlobalZIndex, JustifyContent, Node, Overflow, PositionType, UiGlobalTransform, UiScale,
+    UiTargetCamera, Val,
 };
 use bevy_window::{Ime, PrimaryWindow, Window};
 
@@ -600,6 +601,22 @@ fn placeholder_visibility(
     }
 }
 
+/// Which edge of the field's content box the hint is placed against, mirroring
+/// what [`update_editable_text_styles`](bevy_ui::widget::update_editable_text_styles)
+/// hands parley for the editor's own text.
+fn placeholder_justify(justify: Justify) -> JustifyContent {
+    match justify {
+        Justify::Center => JustifyContent::Center,
+        Justify::Right => JustifyContent::FlexEnd,
+        Justify::Left => JustifyContent::FlexStart,
+        // direction-aware: the logical JustifyContent variants resolve against
+        // the node's own direction, exactly as parley resolves these for text
+        Justify::End => JustifyContent::End,
+        // Justified has no slack for a single-line hint -- treat it as Start
+        Justify::Start | Justify::Justified => JustifyContent::Start,
+    }
+}
+
 /// Spawns the overlay label when a [`Placeholder`] is added to an
 /// [`EditableText`]. Spawned hidden; [`update_placeholders`] positions it
 /// from real layout data and reveals it (see [`PlaceholderLabel`] for why
@@ -643,6 +660,12 @@ fn on_placeholder_added(
             top: Val::ZERO,
             width: Val::ZERO,
             height: Val::ZERO,
+            // the hint sits against the same edge the editor will lay the real
+            // text against, so it does not jump when the first character
+            // arrives. The inner text child hugs its own text (auto width), so
+            // this has to be flex placement on the wrapper -- the child's own
+            // `TextLayout::justify` has no slack to work with.
+            justify_content: placeholder_justify(layout.justify),
             // clips the inner text child so long hints truncate at the
             // field's bounds like a real input (Overflow clips CHILDREN,
             // not a node's own text -- hence the split).
@@ -691,6 +714,7 @@ fn update_placeholders(
             Option<&PlaceholderColor>,
             Ref<TextFont>,
             &TextColor,
+            Ref<TextLayout>,
             &EditableText,
             &ComputedNode,
             &UiGlobalTransform,
@@ -711,6 +735,7 @@ fn update_placeholders(
             pcolor,
             field_font,
             field_color,
+            field_layout,
             editable_text,
             field_node,
             field_transform,
@@ -744,6 +769,15 @@ fn update_placeholders(
             node.top = top;
             node.width = width;
             node.height = height;
+        }
+        // a field may be restyled after the hint exists (justify is the one that
+        // MOVES it -- an off-edge hint reads as a rendering bug). Only the
+        // wrapper is synced: the inner text child hugs its own text, so its
+        // `TextLayout` cannot place anything, and writing it here would make
+        // this system conflict with `text_system` over `TextLayout`.
+        let justify = placeholder_justify(field_layout.justify);
+        if node.justify_content != justify {
+            node.justify_content = justify;
         }
         if !label.positioned {
             // written position takes effect at NEXT frame's layout; stay
