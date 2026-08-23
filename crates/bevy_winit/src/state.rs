@@ -10,7 +10,9 @@ use bevy_ecs::{
 };
 use bevy_input::{
     gestures::*,
+    keyboard::{Key, KeyCode, KeyboardInput},
     mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
+    ButtonState,
 };
 use bevy_log::{trace, warn};
 use bevy_math::{ivec2, DVec2, Vec2};
@@ -280,6 +282,55 @@ impl ApplicationHandler<WinitUserEvent> for WinitAppRunnerState {
                             pressed_keys.0.remove(&keyboard_input.key_code);
                         }
                         self.bevy_window_events.send(keyboard_input);
+                    }
+                    WindowEvent::ModifiersChanged(mods) => {
+                        // The platform's AUTHORITATIVE modifier state, refreshed on
+                        // every transition. ButtonInput otherwise only accumulates raw
+                        // key down/ups, so one lost keyup (tab switch mid-chord, the
+                        // web backend's blur gaps) latches a modifier forever -- on
+                        // wasm that shows as "typing works but Backspace/arrows are
+                        // dead" until the user happens to tap the stuck key. Synthesize
+                        // releases for every modifier the platform says is UP; a
+                        // release of an unpressed key is a no-op in ButtonInput, so
+                        // the healthy path costs nothing.
+                        let state = mods.state();
+                        let mut release = |up: bool, codes: [KeyCode; 2], logical: Key| {
+                            if !up {
+                                return;
+                            }
+                            for key_code in codes {
+                                if pressed_keys.0.remove(&key_code).is_some() {
+                                    self.bevy_window_events.send(KeyboardInput {
+                                        state: ButtonState::Released,
+                                        key_code,
+                                        logical_key: logical.clone(),
+                                        text: None,
+                                        repeat: false,
+                                        window,
+                                    });
+                                }
+                            }
+                        };
+                        release(
+                            !state.shift_key(),
+                            [KeyCode::ShiftLeft, KeyCode::ShiftRight],
+                            Key::Shift,
+                        );
+                        release(
+                            !state.control_key(),
+                            [KeyCode::ControlLeft, KeyCode::ControlRight],
+                            Key::Control,
+                        );
+                        release(
+                            !state.alt_key(),
+                            [KeyCode::AltLeft, KeyCode::AltRight],
+                            Key::Alt,
+                        );
+                        release(
+                            !state.super_key(),
+                            [KeyCode::SuperLeft, KeyCode::SuperRight],
+                            Key::Super,
+                        );
                     }
                     WindowEvent::CursorMoved { position, .. } => {
                         let physical_position = DVec2::new(position.x, position.y);
