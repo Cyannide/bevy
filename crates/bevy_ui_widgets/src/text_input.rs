@@ -181,7 +181,11 @@ fn on_focused_keyboard_input(
         }
         (NONE | SHIFT, Key::Home) => queue_edit(TextEdit::LineStart(shift_pressed)),
         (NONE | SHIFT, Key::End) => queue_edit(TextEdit::LineEnd(shift_pressed)),
-        (NONE, Key::Backspace) => queue_edit(TextEdit::Backspace),
+        // NONE | SHIFT: a touch-typist correcting a capital hits Backspace
+        // while Shift is still physically held -- on every real keyboard
+        // that chord IS backspace. (Delete stays NONE-gated: Shift+Delete
+        // is Cut above.)
+        (NONE | SHIFT, Key::Backspace) => queue_edit(TextEdit::Backspace),
         (NONE, Key::Delete) => queue_edit(TextEdit::Delete),
         (NONE, Key::Escape) => {
             queue_edit(TextEdit::CollapseSelection);
