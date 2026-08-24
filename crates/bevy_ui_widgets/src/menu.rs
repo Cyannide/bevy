@@ -246,7 +246,14 @@ fn menu_on_key_event(
         }
     } else if let Ok(menu) = q_popup.get(ev.focused_entity) {
         let event = &ev.event().input;
-        if !event.repeat && event.state == ButtonState::Pressed {
+        // arrows accept key REPEAT: hold-to-scroll through long lists. Every
+        // other key stays discrete (a repeating Escape or Home is meaningless
+        // at best).
+        let nav_repeat = matches!(
+            event.key_code,
+            KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight
+        );
+        if (!event.repeat || nav_repeat) && event.state == ButtonState::Pressed {
             match event.key_code {
                 // Close the popup
                 KeyCode::Escape => {
@@ -266,10 +273,10 @@ fn menu_on_key_event(
                 // Focus the adjacent item in the up direction
                 KeyCode::ArrowUp if menu.layout == MenuLayout::Column => {
                     ev.propagate(false);
+                    // at the ends the focus HOLDS: clearing here sent the next
+                    // press (or the next repeat of a held key) to the window
                     if let Ok(next) = tab_navigation.navigate(&focus, NavAction::Previous) {
                         focus.set(next, FocusCause::Navigated);
-                    } else {
-                        focus.clear();
                     }
                 }
 
@@ -278,8 +285,6 @@ fn menu_on_key_event(
                     ev.propagate(false);
                     if let Ok(next) = tab_navigation.navigate(&focus, NavAction::Next) {
                         focus.set(next, FocusCause::Navigated);
-                    } else {
-                        focus.clear();
                     }
                 }
 
@@ -288,17 +293,17 @@ fn menu_on_key_event(
                     ev.propagate(false);
                     if let Ok(next) = tab_navigation.navigate(&focus, NavAction::Previous) {
                         focus.set(next, FocusCause::Navigated);
-                    } else {
-                        focus.clear();
                     }
                 }
 
                 // Focus the adjacent item in the right direction
                 KeyCode::ArrowRight if menu.layout == MenuLayout::Row => {
                     ev.propagate(false);
+                    // was `set(next)` immediately followed by `clear()` -- a
+                    // missing `else` made right-arrow BLUR row menus instead
+                    // of navigating
                     if let Ok(next) = tab_navigation.navigate(&focus, NavAction::Next) {
                         focus.set(next, FocusCause::Navigated);
-                        focus.clear();
                     }
                 }
 
