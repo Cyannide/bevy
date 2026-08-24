@@ -300,15 +300,20 @@ pub fn update_editable_text_layout(
         let cursor_width = editable_text.cursor_width;
         let cursor_blink_period = editable_text.cursor_blink_period;
 
+        // #25525 backport: `editor.driver()` needs `&mut`, which marked every
+        // field `Changed` on every frame. Bypass here, re-mark at the bottom
+        // when the layout generation actually moved -- `set_width` is covered
+        // by the same generation bump, and cursor/selection edits fire from
+        // their own systems' ordinary `&mut` access.
+        let inner = editable_text.bypass_change_detection();
+
         if computed_node.is_changed() {
-            editable_text
+            inner
                 .editor
                 .set_width(Some(computed_node.content_box().width()));
         }
 
-        let mut driver = editable_text
-            .editor
-            .driver(font_cx.as_mut(), layout_cx.as_mut());
+        let mut driver = inner.editor.driver(font_cx.as_mut(), layout_cx.as_mut());
 
         driver.refresh_layout();
 
@@ -489,6 +494,11 @@ pub fn update_editable_text_layout(
                 .cursor_geometry(0.)
                 .map(bounding_box_to_rect)
                 .map(|rect| (false, rect));
+        }
+
+        // the re-mark half of the bypass at the top of the loop
+        if layout_changed {
+            editable_text.set_changed();
         }
     }
 }
