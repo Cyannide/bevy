@@ -16,7 +16,7 @@ use bevy_ecs::{
     resource::Resource,
     system::{Res, ResMut},
 };
-use bevy_log::error;
+use bevy_log::{error, warn};
 use bevy_platform::collections::{hash_map::RawEntryMut, HashMap, HashSet};
 use bevy_shader::{
     CachedPipelineId, Shader, ShaderCache, ShaderCacheError, ShaderCacheSource, ShaderDefVal,
@@ -647,6 +647,10 @@ impl PipelineCache {
                     cache: None,
                 };
 
+                // DIAGNOSTIC (fork): a mobile driver that fails to link a
+                // pipeline reports DeviceLost with no label -- the last line
+                // logged here before "Failed to link shaders" names it.
+                warn!("creating render pipeline: {:?}", descriptor.label);
                 Ok(Pipeline::RenderPipeline(
                     device.create_render_pipeline(&descriptor),
                 ))
