@@ -265,7 +265,7 @@ fn try_imagedata_from_image(image: &Image) -> Result<arboard::ImageData<'_>, Cli
 /// or otherwise sharing it across threads, as this could lead to multiple instances attempting to access the clipboard simultaneously and causing a deadlock.
 #[derive(Resource)]
 pub struct Clipboard {
-    #[cfg(all(any(unix, windows), feature = "system_clipboard"))]
+    #[cfg(all(all(any(unix, windows), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"))]
     system_clipboard: Option<arboard::Clipboard>,
     // Unfortunately, this cannot be simplified to `not(any(feature = "system_clipboard", target_arch = "wasm32"))`.
     // `system_clipboard` is a platform-conditional dependency (windows/unix only), so on other platforms
@@ -274,14 +274,14 @@ pub struct Clipboard {
     // broken fallback. wasm32 is excluded separately because it calls web-sys directly and stores
     // no state in the struct.
     #[cfg(not(any(
-        all(any(windows, unix), feature = "system_clipboard"),
+        all(all(any(windows, unix), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"),
         target_arch = "wasm32"
     )))]
     text: String,
 }
 
 #[cfg_attr(
-    not(all(any(unix, windows), feature = "system_clipboard")),
+    not(all(all(any(unix, windows), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard")),
     expect(
         clippy::derivable_impls,
         reason = "non-derivable on unix/windows with system_clipboard"
@@ -290,10 +290,10 @@ pub struct Clipboard {
 impl Default for Clipboard {
     fn default() -> Self {
         Self {
-            #[cfg(all(any(unix, windows), feature = "system_clipboard"))]
+            #[cfg(all(all(any(unix, windows), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"))]
             system_clipboard: arboard::Clipboard::new().ok(),
             #[cfg(not(any(
-                all(any(windows, unix), feature = "system_clipboard"),
+                all(all(any(windows, unix), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"),
                 target_arch = "wasm32"
             )))]
             text: String::new(),
@@ -306,7 +306,7 @@ impl Clipboard {
     ///
     /// On Windows and Unix `ClipboardRead`s are completed instantly, on wasm32 the result is fetched asynchronously.
     pub fn fetch_text(&mut self) -> ClipboardRead {
-        #[cfg(all(any(unix, windows), feature = "system_clipboard"))]
+        #[cfg(all(all(any(unix, windows), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"))]
         {
             ClipboardRead::Ready(
                 self.system_clipboard
@@ -343,11 +343,11 @@ impl Clipboard {
         }
 
         #[cfg(not(any(
-            all(any(windows, unix), feature = "system_clipboard"),
+            all(all(any(windows, unix), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"),
             target_arch = "wasm32"
         )))]
         {
-            #[cfg(any(windows, unix))]
+            #[cfg(all(any(windows, unix), not(target_os = "android"), not(target_os = "ios")))]
             bevy_log::warn_once!(
                 "Clipboard read used an in-process fallback buffer rather than the OS clipboard. \
                  Enable the `system_clipboard` feature on `bevy_clipboard` to use the OS clipboard."
@@ -378,7 +378,7 @@ impl Clipboard {
     ///
     /// Returns error if `text` failed to be stored on the clipboard.
     pub fn set_text<'a, T: Into<Cow<'a, str>>>(&mut self, text: T) -> Result<(), ClipboardError> {
-        #[cfg(all(any(unix, windows), feature = "system_clipboard"))]
+        #[cfg(all(all(any(unix, windows), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"))]
         {
             self.system_clipboard
                 .as_mut()
@@ -402,11 +402,11 @@ impl Clipboard {
         }
 
         #[cfg(not(any(
-            all(any(windows, unix), feature = "system_clipboard"),
+            all(all(any(windows, unix), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"),
             target_arch = "wasm32"
         )))]
         {
-            #[cfg(any(windows, unix))]
+            #[cfg(all(any(windows, unix), not(target_os = "android"), not(target_os = "ios")))]
             bevy_log::warn_once!(
                 "Clipboard write used an in-process fallback buffer rather than the OS clipboard. \
                  Enable the `system_clipboard` feature on `bevy_clipboard` to use the OS clipboard."
@@ -491,7 +491,7 @@ impl core::fmt::Display for ClipboardError {
 
 impl core::error::Error for ClipboardError {}
 
-#[cfg(all(any(windows, unix), feature = "system_clipboard"))]
+#[cfg(all(all(any(windows, unix), not(target_os = "android"), not(target_os = "ios")), feature = "system_clipboard"))]
 impl From<arboard::Error> for ClipboardError {
     fn from(value: arboard::Error) -> Self {
         match value {
