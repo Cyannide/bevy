@@ -877,6 +877,22 @@ fn apply_pbr_lighting(
 #endif // PREPASS_FRAGMENT
 
 #ifdef DISTANCE_FOG
+// The view's fog uniform, copied into a local one field at a time. Passing the
+// uniform whole (`apply_fog(view_bindings::fog, ...)`) loads the struct as a
+// single value, and the Adreno 830 Vulkan driver (Android, 2026) loses `mode`
+// -- the u32 after the `bi` vec3 -- in that load: `apply_fog` then reads the
+// fog as off and every material draws unfogged. Field by field it reads right.
+fn view_fog() -> mesh_view_types::Fog {
+    var fog: mesh_view_types::Fog;
+    fog.base_color = view_bindings::fog.base_color;
+    fog.directional_light_color = view_bindings::fog.directional_light_color;
+    fog.be = view_bindings::fog.be;
+    fog.directional_light_exponent = view_bindings::fog.directional_light_exponent;
+    fog.bi = view_bindings::fog.bi;
+    fog.mode = view_bindings::fog.mode;
+    return fog;
+}
+
 fn apply_fog(
     fog_params: mesh_view_types::Fog,
     input_color: vec4<f32>,
@@ -1001,7 +1017,7 @@ fn main_pass_post_lighting_processing(
     // fog
     if ((pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT) != 0u) {
         output_color = apply_fog(
-            view_bindings::fog,
+            view_fog(),
             output_color,
             pbr_input.world_position.xyz,
             view_bindings::view.world_position.xyz,
