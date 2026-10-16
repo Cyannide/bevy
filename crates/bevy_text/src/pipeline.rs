@@ -502,6 +502,9 @@ pub struct TextLayoutInfo {
     /// Underline rects for the active IME preedit/compose region.
     /// Should only have values when composition is in progress.
     pub preedit_underline_rects: Vec<Rect>,
+    /// Glyphs of an editable text's [`Placeholder`](crate::Placeholder), laid out
+    /// like [`glyphs`](Self::glyphs). Empty unless the placeholder is shown.
+    pub placeholder_glyphs: Vec<PositionedGlyph>,
     /// inline boxes
     pub inline_boxes: Vec<(Entity, crate::InlineBoxKind, Rect)>,
 }
@@ -517,6 +520,7 @@ impl TextLayoutInfo {
         self.cursor = None;
         self.selection_rects.clear();
         self.preedit_underline_rects.clear();
+        self.placeholder_glyphs.clear();
     }
 }
 
@@ -530,6 +534,7 @@ impl Default for TextLayoutInfo {
             cursor: None,
             selection_rects: Default::default(),
             preedit_underline_rects: Default::default(),
+            placeholder_glyphs: Default::default(),
             inline_boxes: Default::default(),
         }
     }
